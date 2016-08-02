@@ -2252,6 +2252,8 @@ public class BackupManagerService {
             mConnectedAgent = null;
             try {
                 if (mActivityManager.bindBackupAgent(app, mode)) {
+                if (mActivityManager.bindBackupAgent(app.packageName, mode,
+                        UserHandle.USER_OWNER)) {
                     Slog.d(TAG, "awaiting agent for " + app);
 
                     // success; wait for the agent to arrive
