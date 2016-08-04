@@ -352,11 +352,6 @@ public class BackupManagerService {
                 } catch (RemoteException e) {
                     // can't happen; it's a local object
                 }
-
-                BackupManagerService service = sInstance.mService;
-                if (service != null) {
-                    service.bindTransport(service.mTransportServiceIntent);
-                }
             }
         }
     }
@@ -1966,23 +1961,12 @@ public class BackupManagerService {
     void checkForTransportAndBind(PackageInfo pkgInfo) {
         Intent intent = new Intent(mTransportServiceIntent)
                 .setPackage(pkgInfo.packageName);
-        bindTransport(intent);
-    }
-
-    // Find transport hosts by specified intent and bind to their services
-    void bindTransport(Intent intent) {
         List<ResolveInfo> hosts = mPackageManager.queryIntentServicesAsUser(
                 intent, 0, UserHandle.USER_OWNER);
-        if (DEBUG) {
-            Slog.v(TAG, "Found transports: " + ((hosts == null) ? "null" : hosts.size()));
-        }
         if (hosts != null) {
             final int N = hosts.size();
             for (int i = 0; i < N; i++) {
                 final ServiceInfo info = hosts.get(i).serviceInfo;
-                if (MORE_DEBUG) {
-                    Slog.v(TAG, "   " + info.packageName + "/" + info.name);
-                }
                 tryBindTransport(info);
             }
         }
@@ -2247,11 +2231,10 @@ public class BackupManagerService {
     // fire off a backup agent, blocking until it attaches or times out
     IBackupAgent bindToAgentSynchronous(ApplicationInfo app, int mode) {
         IBackupAgent agent = null;
-        synchronized(mAgentConnectLock) {
-            mConnecting = true;
-            mConnectedAgent = null;
-            try {
-                if (mActivityManager.bindBackupAgent(app, mode)) {
+        try {
+            synchronized(mAgentConnectLock) {
+                mConnecting = true;
+                mConnectedAgent = null;
                 if (mActivityManager.bindBackupAgent(app.packageName, mode,
                         UserHandle.USER_OWNER)) {
                     Slog.d(TAG, "awaiting agent for " + app);
@@ -2266,7 +2249,6 @@ public class BackupManagerService {
                         } catch (InterruptedException e) {
                             // just bail
                             Slog.w(TAG, "Interrupted: " + e);
-                            mActivityManager.clearPendingBackup();
                             return null;
                         }
                     }
@@ -2274,14 +2256,22 @@ public class BackupManagerService {
                     // if we timed out with no connect, abort and move on
                     if (mConnecting == true) {
                         Slog.w(TAG, "Timeout waiting for agent " + app);
-                        mActivityManager.clearPendingBackup();
                         return null;
                     }
                     if (DEBUG) Slog.i(TAG, "got agent " + mConnectedAgent);
                     agent = mConnectedAgent;
                 }
-            } catch (RemoteException e) {
+            }
+        } catch (RemoteException e) {
                 // can't happen - ActivityManager is local
+        } finally {
+            // failed to bind backup agent, clear pending backup
+            if (agent == null) {
+                try {
+                    mActivityManager.clearPendingBackup();
+                } catch (RemoteException e) {
+                    // can't happen - ActivityManager is local
+                }
             }
         }
         return agent;
@@ -2962,6 +2952,12 @@ public class BackupManagerService {
 
             final String pkgName = mCurrentPackage.packageName;
             final long filepos = mBackupDataName.length();
+            if (mBackupData == null) {
+                failAgent(mAgentBinder, "Backup data was null: " + mBackupDataName);
+                addBackupTrace("backup data was null: " + mBackupDataName);
+                agentErrorCleanup();
+                return;
+            }
             FileDescriptor fd = mBackupData.getFileDescriptor();
             try {
                 // If it's a 3rd party app, see whether they wrote any protected keys
